@@ -7,30 +7,38 @@
 #include <intr.h>
 #include <cr.h>
 
-/// Global variables ///
-/* Define GDT */ 
-__attribute__((aligned(8))) seg_desc_t gdt[GDT_LIMIT];
-/* Define TSS */
-__attribute__((aligned(8))) tss_t tss;
+#define GDT_SIZE 6
 /* Segmentation selectors*/
 #define GDT_C0  1
 #define GDT_D0  2
 #define GDT_C3  3
 #define GDT_D3  4
 #define TSS_S0  5
+
 /* Kernel physical address */
-#define KERNEL_PGD 0x200000
-#define KERNEL_PTB KERNEL_PGD + 0x1000
+#define KERNEL_PGD 0x310000
+#define KERNEL_PTB 0x311000
 
-/* User physical address */
-#define USER_CODE_OFFSET 0x00000
-#define SHARED_MEMORY 0x80000
-
-/* User virtual address */
+/* User */
 #define USER_PGD_OFFSET 0xc0000
 #define USER_PTB_OFFSET 0xc1000
 
-extern info_t *info;
+#define SHARED_MEMORY 0x800000 
+
+/// Global variables ///
+/* Define gdt, tss, idtr */ 
+seg_desc_t gdt[GDT_SIZE];
+tss_t tss;
+idt_reg_t  idtr;
+/* Define tasks */
+task_t     kernel;
+task_t     task_1;
+task_t     task_2;
+int current_task = -1;
+/* Define pgd */
+pde32_t*   pgd_kr   = (pde32_t*) PGD0_BADDR;
+pde32_t*   pgd_task1 = (pde32_t*) PGD1_BADDR;
+pde32_t*   pgd_task2 = (pde32_t*) PGD2_BADDR;
 
 /// Define the userland ///
 /* User 1 is the task 1 (counteur in shared memory)*/
@@ -53,21 +61,20 @@ __attribute__((section(".user2"))) void print_counter()
   }
 }
 
-/* Define the task for organise processus*/
-unsigned int num_tasks = 2;
-uint32_t tasks[1] = {};
-int current_task = -1;
-
 /// Pagination ///
 /* We use identity mapping.
    The size of pages is 4KB.
    Physical adress is chosen (with first_pte)
    Virtual adress is different.
+   This fonction can be reuse to paginate different zone in the memory from one first pte address
 */
-void set_pagination(pde32_t *pgd, pte32_t *first_pte, unsigned int flags){
+void set_pagination_kernel(pde32_t *pgd, pte32_t *first_pte){
     // Défine pgd
+    pte32_t* ptb1_kr = (pte32_t*) (PGD0_BADDR + 0x1000);
     memset(pgd, 0, PAGE_SIZE);
+    pg_set_entry(&pgd[0], PG_KRN|PG_RW, page_nr(ptb1_kr));
     
+
     // Define one or many page tables (pde) (2 pde of 1024 entries here)
     int pde_number = 1;   
     for (int pde_num = 0; pde_num <= pde_number; pde_num++){
@@ -82,6 +89,8 @@ void set_pagination(pde32_t *pgd, pte32_t *first_pte, unsigned int flags){
 
     // Enable paging 
     set_cr3(pgd);
+    uint32_t cr0 = get_cr0();
+    set_cr0(cr0|CR0_PG);
 }
 
 /// Segmetation of memory ///  
@@ -101,9 +110,17 @@ void set_segmentation(){
 	set_fs(gdt_krn_seg_sel(GDT_D0));
 	set_gs(gdt_krn_seg_sel(GDT_D0));
 
+    set_ds(gdt_usr_seg_sel(GDT_D3));
+    set_es(gdt_usr_seg_sel(GDT_D3));
+    set_fs(gdt_usr_seg_sel(GDT_D3));
+    set_gs(gdt_usr_seg_sel(GDT_D3));
+    set_tr(gdt_krn_seg_sel(TSS_S0));
+    
     // Initialisation tss
     memset(&tss, 0, sizeof tss);
     tss_dsc(&gdt[TSS_S0], (offset_t)&tss);
+    tss.s0.ss = gdt_krn_seg_sel(GDT_D0);
+    tss.s0.esp = get_esp();
 
 }
 
@@ -112,8 +129,10 @@ void set_segmentation(){
    - They share one memory zone (page size)
    - They have their kernel stack
    - They have their user stack */ 
-void set_task(){
-    Ici on doit prépare une mémoire de page et une pile
+void set_task(uint32_t user_task){
+    // Activation of pagination for user
+    set_pagination((pde32_t *)(user_task + USER_PGD_OFFSET), (pte32_t *)(user_task + USER_PTB_OFFSET), PG_USR | PG_RW);
+
 }
 
 /// Interruption ///
@@ -164,18 +183,17 @@ void set_idt(){
 }
 void tp()
 {
-    // Activation of pagination 
-    set_pagination((pde32_t *)KERNEL_PGD_ADDR, (pte32_t *)KERNEL_PTB_ADDR, PG_KRN | PG_RW);
-    set_cr0(get_cr0() | CR0_PG | CR0_PE);
-
+    // Activation of pagination in the kernel
+    set_pagination((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
+   
     // Set up one memory segment 
     set_segmentation();
 
-    // Set up 2 tasks
+    // Set up 2 tasks (pagination and stack)
     set_task((uint32_t)increment_counter);
     set_task((uint32_t)print_counter);
     
-    // Set shared memory up
+    /*// Set shared memory up
     {
     // 0x800000 to 0x800000
     pde32_t *pgd = (pde32_t *)(increment_counter + USER_PGD_OFFSET);
@@ -189,5 +207,7 @@ void tp()
     pte32_t *ptb = (pte32_t *)(print_counter + USER_PTB_OFFSET + 2 * 4096);
     pg_set_entry(&pgd[2], PG_USR | PG_RW, page_nr(ptb));
     pg_set_entry(&ptb[1], PG_USR | PG_RW, page_nr(SHARED_MEMORY));
-    }
+    }*/
+
+    while(1);
 }
