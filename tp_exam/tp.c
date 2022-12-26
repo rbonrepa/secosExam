@@ -20,16 +20,17 @@
 #define KERNEL_PTB 0x311000
 
 /* User */
+#define USER_KERNEL_STACK_START 0xffff0
+
 #define USER_PGD_OFFSET 0xc0000
 #define USER_PTB_OFFSET 0xc1000
 
 #define SHARED_MEMORY 0x800000 
 
 /// Global variables ///
-/* Define gdt, tss, idtr */ 
+/* Define gdt, tss */ 
 seg_desc_t gdt[GDT_SIZE];
 tss_t tss;
-idt_reg_t  idtr;
 /* Define tasks */
 task_t     kernel;
 task_t     task_1;
@@ -125,14 +126,15 @@ void set_segmentation(){
 }
 
 /// Define tasks ///
-/* - One task have own PGD/PTB
-   - They share one memory zone (page size)
-   - They have their kernel stack
-   - They have their user stack */ 
 void set_task(uint32_t user_task){
-    // Activation of pagination for user
+    // Tasks have their own PGD/PTB
     set_pagination((pde32_t *)(user_task + USER_PGD_OFFSET), (pte32_t *)(user_task + USER_PTB_OFFSET), PG_USR | PG_RW);
 
+    // Tasks have their kernel stack
+    uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
+
+    // Tasks have their user stack
+    //?uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
 }
 
 /// Interruption ///
@@ -163,51 +165,76 @@ void handler_clock(){
     
 }
 
-/* ?? */
-void handler(){
-    if (num_tasks <= 0)
-    return;
-    
-}
-
-/// Interruption table ///
-void set_idt(){
-    // Create idtr
-    idt_reg_t idtr;
-    get_idtr(idtr);
-    int_desc_t *idt = idtr.desc;
-
-    offset_t idt = idtr.addr;
-    idt += sizeof(int_desc_t) * 3; 
-
-}
-void tp()
+/** Handles `int 0x80`, i.e. syscall interrupts. */
+void handle_syscall()
 {
-    // Activation of pagination in the kernel
-    set_pagination((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
-   
-    // Set up one memory segment 
-    set_segmentation();
+  asm volatile("pusha\n");
+  uint32_t *ptr;
+  asm volatile(
+      "mov %%eax, %0\n"
+      : "=r"(ptr));
+  debug("Counter: %d\n", *ptr);
+  asm volatile(
+      "popa\n"
+      "leave\n"
+      "iret\n");
+}
 
-    // Set up 2 tasks (pagination and stack)
-    set_task((uint32_t)increment_counter);
-    set_task((uint32_t)print_counter);
-    
-    /*// Set shared memory up
-    {
+/// Shared memory ///
+/* Les tâches ont une zone de mémoire partagée:
+        De la taille d'une page (4KB)
+        À l'adresse physique de votre choix
+        À des adresses virtuelles différentes
+*/
+void set_shared_memory(){
     // 0x800000 to 0x800000
     pde32_t *pgd = (pde32_t *)(increment_counter + USER_PGD_OFFSET);
     pte32_t *ptb = (pte32_t *)(increment_counter + USER_PTB_OFFSET + 2 * 4096);
     pg_set_entry(&pgd[2], PG_USR | PG_RW, page_nr(ptb));
     pg_set_entry(&ptb[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY));
-    }
-    {
+    
+    
     // 0x801000 to 0x800000
     pde32_t *pgd = (pde32_t *)(print_counter + USER_PGD_OFFSET);
     pte32_t *ptb = (pte32_t *)(print_counter + USER_PTB_OFFSET + 2 * 4096);
     pg_set_entry(&pgd[2], PG_USR | PG_RW, page_nr(ptb));
     pg_set_entry(&ptb[1], PG_USR | PG_RW, page_nr(SHARED_MEMORY));
-    }*/
+
+}
+
+/// Interruption table ///
+void set_idt(){
+    // Create idtr: registre with memory emplacement
+    idt_reg_t idtr;
+    get_idtr(idtr);
+
+    // Define idt
+    //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
+    int_desc_t *idt = idtr.desc;
+
+    // Address for handle clock: permite to change task.
+    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_clock);
+    idt[32].dpl = SEG_SEL_USR;
+
+    // Interruption for syscall
+    int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_syscall);
+    idt[0x80].dpl = SEG_SEL_USR;   
+
+}
+void tp()
+{
+    // Kernel is identity mapped
+    set_pagination((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
+   
+    // Set up one memory segment 
+    set_segmentation();
+
+    // Set up 2 tasks (pagination + kernel stack + user stack)
+    set_task((uint32_t)increment_counter);
+    set_task((uint32_t)print_counter);
+    
+    // Tasks have shared memory
+    set_shared_memory();
 
     while(1);
 }
