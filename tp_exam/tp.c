@@ -7,7 +7,7 @@
 #include <intr.h>
 #include <cr.h>
 
-#define GDT_SIZE 6
+#define GDT_SIZE 6 
 /* Segmentation selectors*/
 #define GDT_C0  1
 #define GDT_D0  2
@@ -63,29 +63,21 @@ __attribute__((section(".user2"))) void print_counter()
 }
 
 /// Pagination ///
-/* We use identity mapping.
-   The size of pages is 4KB.
-   Physical adress is chosen (with first_pte)
-   Virtual adress is different.
-   This fonction can be reuse to paginate different zone in the memory from one first pte address
+/* This function creates 2 ptb of 1024 entries in one pgd
 */
-void set_pagination_kernel(pde32_t *pgd, pte32_t *first_pte){
-    // Défine pgd
-    pte32_t* ptb1_kr = (pte32_t*) (PGD0_BADDR + 0x1000);
+void set_pagination(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
+    // Define pgd
     memset(pgd, 0, PAGE_SIZE);
-    pg_set_entry(&pgd[0], PG_KRN|PG_RW, page_nr(ptb1_kr));
-    
+    // For two entries in pgd, define pde of 1024 entries: pgd[0] = ptb1 and pgd[1] = ptb2
+    int ptb_number = 1;   
+    for (int ptb_num = 0; ptb_num <= ptb_number; ptb_num++){
+        pte32_t *ptb = first_ptb + pdb_num * 4096;
+	// For each entries in ptb, define one pte
+        for (int ptb_entry = 0; ptb_entry < 1024; ptb_entry++)
+            pg_set_entry(&ptb[ptb_entry], flags, ptb_entry + ptb_num * 1024);
 
-    // Define one or many page tables (pde) (2 pde of 1024 entries here)
-    int pde_number = 1;   
-    for (int pde_num = 0; pde_num <= pde_number; pde_num++){
-        // For each entry in pde, define pte (page adress of 4096)
-        pte32_t *pte = first_pte + pde_num * 4096;
-        for (int pte_entry = 0; pte_entry < 1024; pte_entry++)
-            pg_set_entry(&pte[pte_entry], flags, pte_entry + pde_num * 1024);
-
-        // Add the pte to the pgd
-        pg_set_entry(&pgd[pde_number], flags, page_nr(pte));
+        // Add the ptb to the pgd
+        pg_set_entry(&pgd[ptb_num], flags, page_nr(pte));
     }
 
     // Enable paging 
@@ -127,14 +119,18 @@ void set_segmentation(){
 
 /// Define tasks ///
 void set_task(uint32_t user_task){
-    // Tasks have their own PGD/PTB
-    set_pagination((pde32_t *)(user_task + USER_PGD_OFFSET), (pte32_t *)(user_task + USER_PTB_OFFSET), PG_USR | PG_RW);
+    // Create pgd/ptb
+    pde32_t *pgd_task = (pde32_t *)(user_task + USER_PGD_OFFSET);
+    pte32_t *ptb_task = (pte32_t *)(user_task + USER_PTB_OFFSET);
+    set_pagination(pgd_task, ptb_task, PG_USR | PG_RW);
 
-    // Tasks have their kernel stack
+    // Create the kernel stack
     uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
 
-    // Tasks have their user stack
-    //?uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
+    // Create the shared memory
+    pte32_t *ptb_shared = (pte32_t *)(user_task + USER_PTB_OFFSET + 2 * 4096);
+    pg_set_entry(&pgd_task[2], PG_USR | PG_RW, page_nr(ptb_shared)); // pgd[0] = ptb1, pgd[1] = ptb2, pgd[2] = ptb_shared
+    pg_set_entry(&ptb_shared[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY)); // Pointe vers une même adresse
 }
 
 /// Interruption ///
@@ -180,28 +176,6 @@ void handle_syscall()
       "iret\n");
 }
 
-/// Shared memory ///
-/* Les tâches ont une zone de mémoire partagée:
-        De la taille d'une page (4KB)
-        À l'adresse physique de votre choix
-        À des adresses virtuelles différentes
-*/
-void set_shared_memory(){
-    // 0x800000 to 0x800000
-    pde32_t *pgd = (pde32_t *)(increment_counter + USER_PGD_OFFSET);
-    pte32_t *ptb = (pte32_t *)(increment_counter + USER_PTB_OFFSET + 2 * 4096);
-    pg_set_entry(&pgd[2], PG_USR | PG_RW, page_nr(ptb));
-    pg_set_entry(&ptb[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY));
-    
-    
-    // 0x801000 to 0x800000
-    pde32_t *pgd = (pde32_t *)(print_counter + USER_PGD_OFFSET);
-    pte32_t *ptb = (pte32_t *)(print_counter + USER_PTB_OFFSET + 2 * 4096);
-    pg_set_entry(&pgd[2], PG_USR | PG_RW, page_nr(ptb));
-    pg_set_entry(&ptb[1], PG_USR | PG_RW, page_nr(SHARED_MEMORY));
-
-}
-
 /// Interruption table ///
 void set_idt(){
     // Create idtr: registre with memory emplacement
@@ -233,8 +207,9 @@ void tp()
     set_task((uint32_t)increment_counter);
     set_task((uint32_t)print_counter);
     
-    // Tasks have shared memory
-    set_shared_memory();
+    // Set tasks in the shared memory
+    set_shared_memory((uint32_t)increment_counter, 0);
+    set_shared_memory((uint32_t)print_counter, 1);
 
     while(1);
 }
