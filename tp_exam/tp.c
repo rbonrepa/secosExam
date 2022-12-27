@@ -33,7 +33,7 @@ int current_task = -1;
 //--- Define the userland ---//
 /* Task 1: counteur in shared memory. */
 __attribute__((section(".user1"))) void increment_counter(){
-    uint32_t *counter = (uint32_t *)0x800000;
+    uint32_t *counter = (uint32_t *)SHARED_MEMORY;
     *counter = 0;
     while (1)
       (*counter)++;
@@ -71,35 +71,30 @@ void set_pagination(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
     set_cr0(cr0|CR0_PG);
 }
 
-//--- Segmentation of memory ---//
-/* This function allows to initialise the segmentation selector in the kernel. */
-void set_segmentation(){
-    // Initialisation gdt
+//--- Define kernel ---//
+/* This function allows to initialise gdt, tss, registers, and pagination. */
+void set_kernel(){
+    // Initialisaion gdt
     gdt_reg_t gdtr = {
 	desc : gdt,
 	limit : sizeof(gdt) - 1
     };
+	
+    // Initialisation tss
+    memset(&tss, 0, sizeof tss); // reserve memory
+    tss_dsc(&gdt[TSS_S0], (offset_t)&tss); // record in the gdt
     set_gdtr(gdtr);
-
-    // Défine registres
+	
+    // Initialisation registres in gdt
     set_cs(gdt_krn_seg_sel(RING0_CODE)); 
     set_ss(gdt_krn_seg_sel(RING0_DATA));
     set_ds(gdt_krn_seg_sel(RING0_DATA));
     set_es(gdt_krn_seg_sel(RING0_DATA));
     set_fs(gdt_krn_seg_sel(RING0_DATA));
     set_gs(gdt_krn_seg_sel(RING0_DATA));
-
-    set_ds(gdt_usr_seg_sel(RING3_DATA));
-    set_es(gdt_usr_seg_sel(RING3_DATA));
-    set_fs(gdt_usr_seg_sel(RING3_DATA));
-    set_gs(gdt_usr_seg_sel(RING3_DATA));
-    set_tr(gdt_krn_seg_sel(TSS_S0));
-
-    // Initialisation tss
-    memset(&tss, 0, sizeof tss);
-    tss_dsc(&gdt[TSS_S0], (offset_t)&tss);
-    tss.s0.ss = gdt_krn_seg_sel(GDT_D0);
-    tss.s0.esp = get_esp();
+	
+    // Activation of pagination for kenerl: set pgd at 0x310000, ptb at 0x311000
+    set_pagination((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
 }
 
 //--- Define tasks ---//
@@ -163,7 +158,16 @@ void handle_kernel_print(){
 
 //-- Interruption table --//
 /* This function allows to create idtr and register the thow handlers aboce. */
-void set_idt(){
+void start_tasks(){
+    // Set registers in user land
+    set_ds(gdt_usr_seg_sel(RING3_DATA));
+    set_es(gdt_usr_seg_sel(RING3_DATA));
+    set_fs(gdt_usr_seg_sel(RING3_DATA));
+    set_gs(gdt_usr_seg_sel(RING3_DATA));
+    set_tr(gdt_krn_seg_sel(TSS_ENTRY));
+    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
+    tss.s0.esp = get_esp();
+	
     // Create idtr: registre with memory emplacement
     idt_reg_t idtr;
     get_idtr(idtr);
@@ -181,29 +185,15 @@ void set_idt(){
  }
 
 void tp(){
-    // Activation of pagination for kenerl: set pgd at 0x310000, ptb at 0x311000
-    set_pagination((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
-
-    // Set up segmentation in kernel 
-    set_segmentation();
-
-    // Set up 2 tasks (pagination + kernel stack + user stack)
+    // Set up kernel: init gdt, tss, register and pagination
+    set_kernel();
+	
+    // Set up 2 tasks: init pagination, kernel stack and shared memory
     set_task((uint32_t)increment_counter);
     set_task((uint32_t)print_counter);
-
-    // Activation of pagination for tasks (pgd/ptb + kernel stack + shared memory)
-    set_shared_memory((uint32_t)increment_counter, 0);
-    set_shared_memory((uint32_t)print_counter, 1);
 	
-    // Start task
-    set_ds(gdt_usr_seg_sel(RING3_DATA));
-    set_es(gdt_usr_seg_sel(RING3_DATA));
-    set_fs(gdt_usr_seg_sel(RING3_DATA));
-    set_gs(gdt_usr_seg_sel(RING3_DATA));
-    set_tr(gdt_krn_seg_sel(TSS_ENTRY));
-    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
-    tss.s0.esp = get_esp();
-    set_idt()
+    // Start task: init idt and records handlers
+    start_tasks()
 
     while(1);
 }
