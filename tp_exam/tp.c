@@ -114,6 +114,34 @@ void set_task(uint32_t user_task){
     pg_set_entry(&ptb_shared[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY)); // Pointe vers une même adresse
 }
 
+//-- Start tasks --//
+/* This function allows to create idtr and register the thow handlers below. */
+void start_tasks(){
+    // Set registers in user land
+    set_ds(gdt_usr_seg_sel(RING3_DATA));
+    set_es(gdt_usr_seg_sel(RING3_DATA));
+    set_fs(gdt_usr_seg_sel(RING3_DATA));
+    set_gs(gdt_usr_seg_sel(RING3_DATA));
+    set_tr(gdt_krn_seg_sel(TSS_ENTRY));
+    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
+    tss.s0.esp = get_esp();
+	
+    // Create idtr: registre with memory emplacement
+    idt_reg_t idtr;
+    get_idtr(idtr);
+
+    // Define idt
+    int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
+
+    // Address for handle_clock: permite to change task.
+    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_clock);
+    idt[32].dpl = SEG_SEL_USR;
+
+    // Address for handle_kernel_print: interruption for syscall
+    int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_kernel_print);
+    idt[0x80].dpl = SEG_SEL_USR;   
+}
+
 //--- Kernel interruptions ---//
 /* This function allows to change task (task1->task2 and reverse). */
 void handler_clock(){
@@ -139,7 +167,6 @@ void handler_clock(){
       "mov %0, %%eax\n"
       :
       : "r"(esp));*/
-
 }
 
 /* This function allows to print the task2 with a syscall. */
@@ -155,34 +182,6 @@ void handle_kernel_print(){
         "leave\n"
         "iret\n");
 }
-
-//-- Interruption table --//
-/* This function allows to create idtr and register the thow handlers aboce. */
-void start_tasks(){
-    // Set registers in user land
-    set_ds(gdt_usr_seg_sel(RING3_DATA));
-    set_es(gdt_usr_seg_sel(RING3_DATA));
-    set_fs(gdt_usr_seg_sel(RING3_DATA));
-    set_gs(gdt_usr_seg_sel(RING3_DATA));
-    set_tr(gdt_krn_seg_sel(TSS_ENTRY));
-    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
-    tss.s0.esp = get_esp();
-	
-    // Create idtr: registre with memory emplacement
-    idt_reg_t idtr;
-    get_idtr(idtr);
-
-    // Define idt
-    int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
-
-    // Address for handle_clock: permite to change task.
-    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_clock);
-    idt[32].dpl = SEG_SEL_USR;
-
-    // Address for handle_kernel_print: interruption for syscall
-    int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_kernel_print);
-    idt[0x80].dpl = SEG_SEL_USR;   
- }
 
 void tp(){
     // Set up kernel: init gdt, tss, register and pagination
