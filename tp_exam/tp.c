@@ -26,8 +26,6 @@
 //--- Global variables ---// 
 seg_desc_t gdt[GDT_SIZE];
 tss_t tss;
-task_t     task_1;
-task_t     task_2;
 int current_task = -1;
 
 //--- Define the userland ---//
