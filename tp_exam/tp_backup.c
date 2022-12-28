@@ -13,10 +13,10 @@
 #define RING0_DATA  2
 #define RING3_CODE  3
 #define RING3_DATA  4
-#define TSS  5
+#define TSS_S0  5
 //--- Kernel address ---//
 #define KERNEL_PGD 0x310000
-#define KERNEcL_PTB 0x311000
+#define KERNEL_PTB 0x311000
 //--- User ---//
 #define USER_KERNEL_STACK_START 0xffff0
 #define USER_PGD_OFFSET 0xc0000
@@ -85,17 +85,16 @@ void set_kernel(){
 	
     // Initialisation tss
     memset(&tss, 0, sizeof tss); // reserve memory
-    //tss_dsc(&gdt[TSS], (offset_t)&tss); // record in the gdt
+    tss_dsc(&gdt[TSS_S0], (offset_t)&tss); // record in the gdt
     set_gdtr(gdtr);
 	
     // Initialisation registres in gdt
-    /* En commentaire car fait bugguer mais important
     set_cs(gdt_krn_seg_sel(RING0_CODE)); 
     set_ss(gdt_krn_seg_sel(RING0_DATA));
     set_ds(gdt_krn_seg_sel(RING0_DATA));
     set_es(gdt_krn_seg_sel(RING0_DATA));
     set_fs(gdt_krn_seg_sel(RING0_DATA));
-    set_gs(gdt_krn_seg_sel(RING0_DATA));*/
+    set_gs(gdt_krn_seg_sel(RING0_DATA));
 	
     // Activation of pagination for kenerl: set pgd at 0x310000, ptb at 0x311000
     set_mapping((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
@@ -110,19 +109,7 @@ void set_task(uint32_t user_task){
     set_mapping(pgd_task, ptb_task, PG_USR | PG_RW);
 
     // Create the kernel stack
-    /* A REECRIRE
-    uint32_t * esp_k = (uint32_t *) esp_kernel; //Cast to pointer
-    *(esp_k) = gdt_usr_seg_sel(GDT_IDX_DATA_R3);
-    *(esp_k - 1) = esp_user;
-    *(esp_k - 2) = EFLAGS_IF;
-    *(esp_k - 3) = gdt_usr_seg_sel(GDT_IDX_CODE_R3);
-    *(esp_k - 4) = eip;
-
-    //Setup the struct in the array for this task
-    nb_tasks++;
-    // esp_k - 14 cuz we have the interruption stack for the iret, the err code and int code and the general registers to pop when we exit an interruption
-    tasks[nb_tasks].esp_kernel = (uint32_t)(esp_k - 14);
-    tasks[nb_tasks].PGD = PGD;*/
+    uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START);
 
     // Create the shared memory
     pte32_t *ptb_shared = (pte32_t *)(user_task + USER_PTB_OFFSET + 2 * 4096);
@@ -181,7 +168,7 @@ void start_tasks(){
     set_es(gdt_usr_seg_sel(RING3_DATA));
     set_fs(gdt_usr_seg_sel(RING3_DATA));
     set_gs(gdt_usr_seg_sel(RING3_DATA));
-    set_tr(gdt_krn_seg_sel(TSS));
+    set_tr(gdt_krn_seg_sel(TSS_ENTRY));
     tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
     tss.s0.esp = get_esp();
 	
@@ -202,20 +189,15 @@ void start_tasks(){
 }
 
 void tp(){
-    debug("-----------  Présentation du travail effectué ----------- \n");
     // Set up kernel: init gdt, tss, register and pagination
     set_kernel();
-    debug("Le Kernel est mappé:\n");
-    debug("PGD Kernel : 0x%x\n", KERNEL_PGD);
-    debug("PGD Kernel : 0x%x\n", KERNEL_PGD);
-
 	
     // Set up 2 tasks: init pagination, kernel stack and shared memory
-    //set_task((uint32_t)increment_counter);
-    //set_task((uint32_t)print_counter);
+    set_task((uint32_t)increment_counter);
+    set_task((uint32_t)print_counter);
 	
     // Start task: init idt and records handlers
-    //start_tasks();
+    start_tasks();
 
     while(1);
 }
