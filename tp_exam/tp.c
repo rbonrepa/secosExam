@@ -15,21 +15,24 @@
 #define RING3_DATA  4
 #define TSS  5
 //--- Kernel address ---//
-#define KERNEL_PGD 0x310000
-#define KERNEcL_PTB 0x311000
+#define KERNEL_PGD 0x200000
+#define KERNEL_PTB 0x210000
 //--- User ---//
-#define USER_KERNEL_STACK_START 0xffff0
 #define USER_PGD_OFFSET 0xc0000
 #define USER_PTB_OFFSET 0xc1000
 #define SHARED_MEMORY 0x800000 
+#define USER_KERNEL_STACK_START_OFFSET 0xffff0
+#define USER_STACK_START_OFFSET 0xefff0
 
 //--- Global variables ---// 
 seg_desc_t gdt[GDT_SIZE];
 tss_t tss;
+idt_reg_t idtr;
+uint32_t tasks[4] = {};
+unsigned int number_tasks = 0;
 int current_task = -1;
 
 //--- Define the userland ---//
-
 __attribute__((section(".sys_count"))) void sys_counter(uint32_t*counter){
     asm volatile("int $80"::"S"(counter));
 }
@@ -67,11 +70,8 @@ void set_mapping(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
         // Add the ptb to the pgd
         pg_set_entry(&pgd[ptb_num], flags, page_nr(ptb));
     }
-
     // Enable paging 
-    set_cr3(pgd);
-    uint32_t cr0 = get_cr0();
-    set_cr0(cr0|CR0_PG);
+    set_cr3(pgd);   
 }
 
 //--- Define kernel ---//
@@ -109,25 +109,20 @@ void set_task(uint32_t user_task){
     pte32_t *ptb_task = (pte32_t *)(user_task + USER_PTB_OFFSET);
     set_mapping(pgd_task, ptb_task, PG_USR | PG_RW);
 
-    // Create the kernel stack
-    /* A REECRIRE
-    uint32_t * esp_k = (uint32_t *) esp_kernel; //Cast to pointer
-    *(esp_k) = gdt_usr_seg_sel(GDT_IDX_DATA_R3);
-    *(esp_k - 1) = esp_user;
-    *(esp_k - 2) = EFLAGS_IF;
-    *(esp_k - 3) = gdt_usr_seg_sel(GDT_IDX_CODE_R3);
-    *(esp_k - 4) = eip;
-
-    //Setup the struct in the array for this task
-    nb_tasks++;
-    // esp_k - 14 cuz we have the interruption stack for the iret, the err code and int code and the general registers to pop when we exit an interruption
-    tasks[nb_tasks].esp_kernel = (uint32_t)(esp_k - 14);
-    tasks[nb_tasks].PGD = PGD;*/
+    // Set the kernel stack
+    uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
+    *(user_kernel_esp - 1) = gdt_usr_seg_sel(RING3_DATA);   // SS
+    *(user_kernel_esp - 2) = user_task + USER_STACK_START_OFFSET; // ESP
+    *(user_kernel_esp - 3) = EFLAGS_IF;                           // Flags
+    *(user_kernel_esp - 4) = gdt_usr_seg_sel(RING3_CODE);   // CS
+    *(user_kernel_esp - 5) = user_task;                           // EIP
 
     // Create the shared memory
     pte32_t *ptb_shared = (pte32_t *)(user_task + USER_PTB_OFFSET + 2 * 4096);
     pg_set_entry(&pgd_task[2], PG_USR | PG_RW, page_nr(ptb_shared)); // pgd[0] = ptb1, pgd[1] = ptb2, pgd[2] = ptb_shared
     pg_set_entry(&ptb_shared[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY)); // Pointe vers une même adresse
+
+    number_tasks++;
 }
 
 
@@ -135,61 +130,57 @@ void set_task(uint32_t user_task){
 //--- Kernel interruptions ---//
 /* This function allows to change task (task1->task2 and reverse). */
 void handler_scheduler(){
-    //if (num_tasks <= 0)
-    return;
+    // If they are no task 
+    if (number_tasks <= 0)
+        return;
 
-    //current_task = (current_task + 1) % num_tasks;
-    //uint32_t task = tasks[current_task];
+    // If it is the first time
+    if (current_task == -1){
+        current_task = 0;
+        ///set_cr3(tasks[current_task_pid].PGD);
+    }
 
-    /*
-    // Record the context 
-    // Find value in the tss 
-    uint32_t user_kernel_esp = task + USER_KERNEL_STACK_START_OFFSET;
-    uint32_t esp = user_kernel_esp - (4 * 13);
-    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA_ENTRY);
-    tss.s0.esp = user_kernel_esp;
-    // Change stack (esp registre)
-    set_cr3(task + USER_PGD_OFFSET);
+    // Else, change task
+    else{
 
-    // Change task:
-     Change segment descriptor in GDT with index in tr 
-    asm volatile(
-      "mov %0, %%eax\n"
-      :
-      : "r"(esp));*/
+        // Record the context// Record the context
+        uint32_t task = tasks[current_task];
+        current_task = (current_task + 1) % number_tasks;
+        uint32_t user_kernel_esp = task + USER_KERNEL_STACK_START_OFFSET;
+        tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
+        tss.s0.esp = user_kernel_esp;
+
+        /* Changer de contexte
+        //set_cr3(task + USER_PGD_OFFSET);
+        int32_t esp = user_kernel_esp - (4 * 13); // 13 entries were pushed to the stack
+        asm volatile(
+        "mov %0, %%eax\n"
+        :
+        : "r"(esp));*/
+    }
 }
 
 /* This function allows to print the task2 with a syscall. */
 void handle_kernel_print(){
-    asm volatile("pusha\n");
-    uint32_t *ptr;
-    asm volatile(
-        "mov %%eax, %0\n"
-        : "=r"(ptr));
-    debug("Counter: %d\n", *ptr);
-    asm volatile(
-        "popa\n"
-        "leave\n"
-        "iret\n");
+    // Interruption for syscall
 }
 
 //-- Start tasks --//
 /* This function allows to create idtr and register the thow handlers below. */
 void start_tasks(){
     // Set registers in user land
+    /*
     set_ds(gdt_usr_seg_sel(RING3_DATA));
     set_es(gdt_usr_seg_sel(RING3_DATA));
     set_fs(gdt_usr_seg_sel(RING3_DATA));
     set_gs(gdt_usr_seg_sel(RING3_DATA));
-    set_tr(gdt_krn_seg_sel(TSS));
+    set_tr(gdt_krn_seg_sel(TSS));*/
+
     tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
     tss.s0.esp = get_esp();
 	
-    // Create idtr: registre with memory emplacement
-    idt_reg_t idtr;
-    get_idtr(idtr);
-
     // Define idt
+    get_idtr(idtr);
     int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
 
     // Address for handle_clock: permite to change task.
@@ -205,17 +196,30 @@ void tp(){
     debug("-----------  Présentation du travail effectué ----------- \n");
     // Set up kernel: init gdt, tss, register and pagination
     set_kernel();
-    debug("Le Kernel est mappé:\n");
-    debug("PGD Kernel : 0x%x\n", KERNEL_PGD);
-    debug("PGD Kernel : 0x%x\n", KERNEL_PGD);
-
-	
+    
     // Set up 2 tasks: init pagination, kernel stack and shared memory
-    //set_task((uint32_t)increment_counter);
-    //set_task((uint32_t)print_counter);
-	
+    //set_cr0(get_cr0() | CR0_PG | CR0_PE);
+    set_task((uint32_t)increment_counter);
+    set_task((uint32_t)print_counter);
+    	
     // Start task: init idt and records handlers
-    //start_tasks();
+    start_tasks();
+    
+    debug("Kernel is mapped:\n");
+    debug("PGD Kernel : 0x%x\n", KERNEL_PGD);
+    debug("PTB Kernel : 0x%x\n", KERNEL_PTB);
+
+    debug("Task 1 is mapped:\n");
+    debug("PGD task 1 : 0x%x\n", increment_counter + USER_PGD_OFFSET);
+    debug("PTB task 2 : 0x%x\n", increment_counter + USER_PTB_OFFSET);
+    
+    debug("Task 2 is mapped:\n");
+    debug("PGD task 2 : 0x%x\n", print_counter + USER_PGD_OFFSET);
+    debug("PTB task 2 : 0x%x\n", print_counter + USER_PGD_OFFSET);
+    
+    debug("Initialisation idt:\n");
+    get_idtr(idtr);int_desc_t *idt = idtr.desc; 
+    debug("Initialisation de l'IDT: ox%x\n", idt);
 
     while(1);
 }
