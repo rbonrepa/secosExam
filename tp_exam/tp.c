@@ -29,6 +29,11 @@ tss_t tss;
 int current_task = -1;
 
 //--- Define the userland ---//
+
+__attribute__((section(".sys_count"))) void sys_counter(uint32_t*counter){
+    asm volatile("int $80"::"S"(counter));
+}
+
 /* Task 1: counteur in shared memory. */
 __attribute__((section(".user1"))) void increment_counter(){
     uint32_t *shared_mem = (uint32_t *)SHARED_MEMORY;
@@ -53,14 +58,14 @@ void set_mapping(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
     // For two entries in pgd, define pde of 1024 entries: pgd[0] = ptb1 and pgd[1] = ptb2
     int ptb_number = 1;   
     for (int ptb_num = 0; ptb_num <= ptb_number; ptb_num++){
-        pte32_t *ptb = first_ptb + pdb_num * 4096;
+        pte32_t *ptb = first_ptb + ptb_num * 4096;
 
             // For each entries in ptb, define one pte
             for (int ptb_entry = 0; ptb_entry < 1024; ptb_entry++)
                 pg_set_entry(&ptb[ptb_entry], flags, ptb_entry + ptb_num * 1024);
 
         // Add the ptb to the pgd
-        pg_set_entry(&pgd[ptb_num], flags, page_nr(pte));
+        pg_set_entry(&pgd[ptb_num], flags, page_nr(ptb));
     }
 
     // Enable paging 
@@ -104,7 +109,7 @@ void set_task(uint32_t user_task){
     set_mapping(pgd_task, ptb_task, PG_USR | PG_RW);
 
     // Create the kernel stack
-    uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
+    uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START);
 
     // Create the shared memory
     pte32_t *ptb_shared = (pte32_t *)(user_task + USER_PTB_OFFSET + 2 * 4096);
@@ -112,42 +117,16 @@ void set_task(uint32_t user_task){
     pg_set_entry(&ptb_shared[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY)); // Pointe vers une même adresse
 }
 
-//-- Start tasks --//
-/* This function allows to create idtr and register the thow handlers below. */
-void start_tasks(){
-    // Set registers in user land
-    set_ds(gdt_usr_seg_sel(RING3_DATA));
-    set_es(gdt_usr_seg_sel(RING3_DATA));
-    set_fs(gdt_usr_seg_sel(RING3_DATA));
-    set_gs(gdt_usr_seg_sel(RING3_DATA));
-    set_tr(gdt_krn_seg_sel(TSS_ENTRY));
-    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
-    tss.s0.esp = get_esp();
-	
-    // Create idtr: registre with memory emplacement
-    idt_reg_t idtr;
-    get_idtr(idtr);
 
-    // Define idt
-    int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
-
-    // Address for handle_clock: permite to change task.
-    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handler_scheduler);
-    idt[32].dpl = SEG_SEL_USR;
-
-    // Address for handle_kernel_print: interruption for syscall
-    int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_kernel_print);
-    idt[0x80].dpl = SEG_SEL_USR;   
-}
 
 //--- Kernel interruptions ---//
 /* This function allows to change task (task1->task2 and reverse). */
 void handler_scheduler(){
-    if (num_tasks <= 0)
+    //if (num_tasks <= 0)
     return;
 
-    current_task = (current_task + 1) % num_tasks;
-    uint32_t task = tasks[current_task];
+    //current_task = (current_task + 1) % num_tasks;
+    //uint32_t task = tasks[current_task];
 
     /*
     // Record the context 
@@ -181,6 +160,34 @@ void handle_kernel_print(){
         "iret\n");
 }
 
+//-- Start tasks --//
+/* This function allows to create idtr and register the thow handlers below. */
+void start_tasks(){
+    // Set registers in user land
+    set_ds(gdt_usr_seg_sel(RING3_DATA));
+    set_es(gdt_usr_seg_sel(RING3_DATA));
+    set_fs(gdt_usr_seg_sel(RING3_DATA));
+    set_gs(gdt_usr_seg_sel(RING3_DATA));
+    set_tr(gdt_krn_seg_sel(TSS_ENTRY));
+    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
+    tss.s0.esp = get_esp();
+	
+    // Create idtr: registre with memory emplacement
+    idt_reg_t idtr;
+    get_idtr(idtr);
+
+    // Define idt
+    int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
+
+    // Address for handle_clock: permite to change task.
+    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE), (offset_t)handler_scheduler);
+    idt[32].dpl = SEG_SEL_USR;
+
+    // Address for handle_kernel_print: interruption for syscall
+    int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE), (offset_t)handle_kernel_print);
+    idt[0x80].dpl = SEG_SEL_USR;   
+}
+
 void tp(){
     // Set up kernel: init gdt, tss, register and pagination
     set_kernel();
@@ -190,7 +197,7 @@ void tp(){
     set_task((uint32_t)print_counter);
 	
     // Start task: init idt and records handlers
-    start_tasks()
+    start_tasks();
 
     while(1);
 }
