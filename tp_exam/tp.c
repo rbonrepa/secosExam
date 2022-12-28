@@ -33,22 +33,22 @@ int current_task = -1;
 //--- Define the userland ---//
 /* Task 1: counteur in shared memory. */
 __attribute__((section(".user1"))) void increment_counter(){
-    uint32_t *counter = (uint32_t *)SHARED_MEMORY;
-    *counter = 0;
+    uint32_t *shared_mem = (uint32_t *)SHARED_MEMORY;
+    *shared_mem = 0;
     while (1)
-      (*counter)++;
+      (*shared_mem)++;
 }
 
 /* Task 2: print counteur in shared memory. */ 
 __attribute__((section(".user2"))) void print_counter(){
-    uint32_t *counter = (uint32_t *)0x801000;
+    uint32_t *shared_mem = (uint32_t *)0x801000;
     while (1)
-      sys_counter(counter);
+      sys_counter(shared_mem);
 }
 
 //--- Pagination ---//
 /* This function creates one pgd and 2 ptb of 1024 entries. */
-void set_pagination(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
+void set_mapping(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
     // Define pgd
     memset(pgd, 0, PAGE_SIZE);
 
@@ -94,7 +94,7 @@ void set_kernel(){
     set_gs(gdt_krn_seg_sel(RING0_DATA));
 	
     // Activation of pagination for kenerl: set pgd at 0x310000, ptb at 0x311000
-    set_pagination((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
+    set_mapping((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
 }
 
 //--- Define tasks ---//
@@ -103,7 +103,7 @@ void set_task(uint32_t user_task){
     // Create pgd/ptb
     pde32_t *pgd_task = (pde32_t *)(user_task + USER_PGD_OFFSET);
     pte32_t *ptb_task = (pte32_t *)(user_task + USER_PTB_OFFSET);
-    set_pagination(pgd_task, ptb_task, PG_USR | PG_RW);
+    set_mapping(pgd_task, ptb_task, PG_USR | PG_RW);
 
     // Create the kernel stack
     uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
@@ -134,7 +134,7 @@ void start_tasks(){
     int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
 
     // Address for handle_clock: permite to change task.
-    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handle_clock);
+    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE_ENTRY), (offset_t)handler_scheduler);
     idt[32].dpl = SEG_SEL_USR;
 
     // Address for handle_kernel_print: interruption for syscall
@@ -144,7 +144,7 @@ void start_tasks(){
 
 //--- Kernel interruptions ---//
 /* This function allows to change task (task1->task2 and reverse). */
-void handler_clock(){
+void handler_scheduler(){
     if (num_tasks <= 0)
     return;
 
