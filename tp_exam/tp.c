@@ -55,14 +55,14 @@ void set_mapping(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
     // For two entries in pgd, define pde of 1024 entries: pgd[0] = ptb1 and pgd[1] = ptb2
     int ptb_number = 1;   
     for (int ptb_num = 0; ptb_num <= ptb_number; ptb_num++){
-	pte32_t *ptb = first_ptb + pdb_num * 4096;
+        pte32_t *ptb = first_ptb + pdb_num * 4096;
 
-	// For each entries in ptb, define one pte
-	for (int ptb_entry = 0; ptb_entry < 1024; ptb_entry++)
-	    pg_set_entry(&ptb[ptb_entry], flags, ptb_entry + ptb_num * 1024);
+            // For each entries in ptb, define one pte
+            for (int ptb_entry = 0; ptb_entry < 1024; ptb_entry++)
+                pg_set_entry(&ptb[ptb_entry], flags, ptb_entry + ptb_num * 1024);
 
-	// Add the ptb to the pgd
-	pg_set_entry(&pgd[ptb_num], flags, page_nr(pte));
+        // Add the ptb to the pgd
+        pg_set_entry(&pgd[ptb_num], flags, page_nr(pte));
     }
 
     // Enable paging 
