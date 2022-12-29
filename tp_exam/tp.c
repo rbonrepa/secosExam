@@ -105,30 +105,31 @@ void set_task(uint32_t user_task){
     number_tasks++;
 }
 
-
-
 //--- Kernel interruptions ---//
 /* This function allows to change task (task1->task2 and reverse). */
 void handler_scheduler(){
-    // If they are no task 
+    debug("Scheduler");
+    // They are no task 
     if (number_tasks <= 0)
         return;
 
-    // If it is the first time
+    // It is the first time
     if (current_task == -1){
         current_task = 0;
         ///set_cr3(tasks[current_task_pid].PGD);
     }
 
-    // Else, change task
+    // Change task
     else{
-
-        // Record the context// Record the context
+        // Code to trint the counteur with kernel syscall
+        debug("Change task");
         uint32_t task = tasks[current_task];
         current_task = (current_task + 1) % number_tasks;
         uint32_t user_kernel_esp = task + USER_KERNEL_STACK_START_OFFSET;
+        // Record the context
         tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
         tss.s0.esp = user_kernel_esp;
+        //Change context
 
         /* Changer de contexte
         //set_cr3(task + USER_PGD_OFFSET);
@@ -142,10 +143,11 @@ void handler_scheduler(){
 
 /* This function allows to print the task2 with a syscall. */
 void handle_kernel_print(){
-    // Interruption for syscall
+    // Code to trint the counteur with kernel syscall
+    debug("Print counteur");
 }
 
-//-- Start tasks --//
+//--- Start tasks ---//
 /* This function allows to create idtr and register the thow handlers below. */
 void start_tasks(){
     // Set registers in user land
@@ -160,20 +162,26 @@ void start_tasks(){
     tss.s0.esp = get_esp();
 	
     // Define idt
+    idt_reg_t idtr;
     get_idtr(idtr);
     int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
 
-    // Address for handle_clock: permite to change task.
+    // Record handler for counter and schedule in idt.
     int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE), (offset_t)handler_scheduler);
     idt[32].dpl = SEG_SEL_USR;
 
-    // Address for handle_kernel_print: interruption for syscall
+    // Record handler for syscall and print in idt.
     int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE), (offset_t)handle_kernel_print);
-    idt[0x80].dpl = SEG_SEL_USR;   
+    idt[0x80].dpl = SEG_SEL_USR; 
+
+    // Start
+    asm volatile("int $0x80;\n");  
 }
 
 void tp(){
     debug("|------   Work demonstration   ------|\n");
+    print_memory_cartography(idtr, (uint32_t)increment_counter, (uint32_t)print_counter);
+
     // Set up kernel: init gdt, tss, register and pagination
     set_kernel();
     
@@ -183,9 +191,7 @@ void tp(){
     set_task((uint32_t)print_counter);
     	
     // Start task: init idt and records handlers
-    start_tasks();
-
-    print_memory_cartography(idtr, (uint32_t)increment_counter, (uint32_t)print_counter);
+    start_tasks();    
     
     debug("|------------     Fin     -----------|\n");
 
