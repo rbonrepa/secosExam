@@ -175,7 +175,7 @@ void start_tasks(){
     idt[0x80].dpl = SEG_SEL_USR; 
 
     // Start
-    asm volatile("int $0x80;\n");  
+    //asm volatile("int $0x80;\n");  
 }
 
 void tp(){
