@@ -1,28 +1,6 @@
 /* GPLv2 (c) Airbus */
-#include <debug.h>
-#include <info.h>
-#include <asm.h>
-#include <segmem.h>
-#include <pagemem.h>
-#include <intr.h>
-#include <cr.h>
-
-#define GDT_SIZE 6 
-//--- Segmentation selectors ---//
-#define RING0_CODE  1
-#define RING0_DATA  2
-#define RING3_CODE  3
-#define RING3_DATA  4
-#define TSS  5
-//--- Kernel address ---//
-#define KERNEL_PGD 0x200000
-#define KERNEL_PTB 0x210000
-//--- User ---//
-#define USER_PGD_OFFSET 0xc0000
-#define USER_PTB_OFFSET 0xc1000
-#define SHARED_MEMORY 0x800000 
-#define USER_KERNEL_STACK_START_OFFSET 0xffff0
-#define USER_STACK_START_OFFSET 0xefff0
+#include "print.c"
+#include "header.c"
 
 //--- Global variables ---// 
 seg_desc_t gdt[GDT_SIZE];
@@ -117,6 +95,8 @@ void set_task(uint32_t user_task){
     *(user_kernel_esp - 4) = gdt_usr_seg_sel(RING3_CODE);   // CS
     *(user_kernel_esp - 5) = user_task;                           // EIP
 
+    print_stack_tasks(user_kernel_esp, number_tasks);
+
     // Create the shared memory
     pte32_t *ptb_shared = (pte32_t *)(user_task + USER_PTB_OFFSET + 2 * 4096);
     pg_set_entry(&pgd_task[2], PG_USR | PG_RW, page_nr(ptb_shared)); // pgd[0] = ptb1, pgd[1] = ptb2, pgd[2] = ptb_shared
@@ -193,7 +173,7 @@ void start_tasks(){
 }
 
 void tp(){
-    debug("-----------  Présentation du travail effectué ----------- \n");
+    debug("|------   Work demonstration   ------|\n");
     // Set up kernel: init gdt, tss, register and pagination
     set_kernel();
     
@@ -204,22 +184,10 @@ void tp(){
     	
     // Start task: init idt and records handlers
     start_tasks();
-    
-    debug("Kernel is mapped:\n");
-    debug("PGD Kernel : 0x%x\n", KERNEL_PGD);
-    debug("PTB Kernel : 0x%x\n", KERNEL_PTB);
 
-    debug("Task 1 is mapped:\n");
-    debug("PGD task 1 : 0x%x\n", increment_counter + USER_PGD_OFFSET);
-    debug("PTB task 2 : 0x%x\n", increment_counter + USER_PTB_OFFSET);
+    print_memory_cartography(idtr, (uint32_t)increment_counter, (uint32_t)print_counter);
     
-    debug("Task 2 is mapped:\n");
-    debug("PGD task 2 : 0x%x\n", print_counter + USER_PGD_OFFSET);
-    debug("PTB task 2 : 0x%x\n", print_counter + USER_PGD_OFFSET);
-    
-    debug("Initialisation idt:\n");
-    get_idtr(idtr);int_desc_t *idt = idtr.desc; 
-    debug("Initialisation de l'IDT: ox%x\n", idt);
+    debug("|------------     Fin     -----------|\n");
 
     while(1);
 }
