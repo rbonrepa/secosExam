@@ -1,8 +1,10 @@
 /* GPLv2 (c) Airbus */
 #include "print.c"
 #include "header.c"
-
-//--- Global variables ---// 
+ 
+/*
+** Global variables
+*/
 seg_desc_t gdt[GDT_SIZE];
 tss_t tss;
 idt_reg_t idtr;
@@ -10,12 +12,16 @@ uint32_t tasks[4] = {};
 unsigned int number_tasks = 0;
 int current_task = -1;
 
-//--- Define the userland ---//
+/*
+** Define the userland
+*/
 __attribute__((section(".sys_count"))) void sys_counter(uint32_t*counter){
     asm volatile("int $80"::"S"(counter));
 }
-
-/* Task 1: counteur in shared memory. */
+ 
+/*
+** Task 1: counteur in shared memory.
+*/
 __attribute__((section(".user1"))) void increment_counter(){
     uint32_t *shared_mem = (uint32_t *)0x800000;
     *shared_mem = 0;
@@ -23,15 +29,19 @@ __attribute__((section(".user1"))) void increment_counter(){
       (*shared_mem)++;
 }
 
-/* Task 2: print counteur in shared memory. */ 
+/*
+** Task 2: print counteur in shared memory.
+*/ 
 __attribute__((section(".user2"))) void print_counter(){
     uint32_t *shared_mem = (uint32_t *)0x801000;
     while (1)
       sys_counter(shared_mem);
 }
 
-//--- Pagination ---//
-/* This function creates one pgd and 2 ptb of 1024 entries. */
+/*
+** Pagination
+** This function creates one pgd and 2 ptb of 1024 entries.
+*/
 void set_mapping(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
     // Define pgd
     memset(pgd, 0, PAGE_SIZE);
@@ -51,74 +61,84 @@ void set_mapping(pde32_t *pgd, pte32_t *first_ptb, unsigned int flags){
        
 }
 
-void init_seg_desc(uint64_t limit, uint64_t base, uint64_t type, uint64_t dpl){
-    int i;
+/*
+** Initialisation of segment descriptor.
+*/
+void init_seg_desc(uint64_t limit, uint64_t base, uint64_t type, uint64_t dpl, uint64_t index){
     gdt_reg_t gdtr;
     get_gdtr(gdtr);
-    if (gdtr.limit == 0){
-        i = 0;
+    
+    gdt[index].raw = 0ULL;
+    gdt[index].base_1 = base;
+    gdt[index].base_2 = base >> 16;
+    gdt[index].base_3 = base >> 24;
+    gdt[index].limit_1 = limit;
+    gdt[index].limit_2 = limit >> 16;
+    gdt[index].type = type;
+    gdt[index].dpl = dpl;
+    // Define the tss segment descriptor
+    if (type == SEG_DESC_SYS_TSS_AVL_32){ 
+        gdt[index].s = 0; 
+        gdt[index].p = 1;
+        gdt[index].avl = 0;
+        gdt[index].l = 0;
+        gdt[index].d = 0;
+        gdt[index].g = 0;
     }
-    else{
-        i = (gdtr.limit + 1)/sizeof(seg_desc_t);
+    else {
+        gdt[index].s = 1; 
+        gdt[index].p = 1;
+        gdt[index].avl = 0;
+        gdt[index].l = 0;
+        gdt[index].d = 1;
+        gdt[index].g = 1;
     }
-    gdt[i].raw = 0ULL;
-    gdt[i].base_1 = base;
-    gdt[i].base_2 = base >> 16;
-    gdt[i].base_3 = base >> 24;
-    gdt[i].limit_1 = limit;
-    gdt[i].limit_2 = limit >> 16;
-    gdt[i].type = type;
-    gdt[i].dpl = dpl;
+    gdtr.limit = gdtr.limit + sizeof(seg_desc_t);
 
-    gdt[i].s = 1; 
-    gdt[i].p = 1;
-    gdt[i].avl = 0;
-    gdt[i].l = 0;
-    gdt[i].d = 1;
-    gdt[i].g = 1;
-
-    if (i == 0){
-        gdtr.limit = sizeof(seg_desc_t) - 1;
-        gdt[0].raw = 0ULL;
-    }
-    else{
-        gdtr.limit = gdtr.limit + sizeof(seg_desc_t);
-    }
     set_gdtr(gdtr);
 }
 
-//--- Define kernel ---//
-/* This function allows to initialise gdt, tss, registers, and pagination. */
+/*
+** Define kernel
+** This function allows to initialise gdt, tss, registers, and pagination.
+*/
 void set_kernel(){
-    // Activation of pagination for kenerl: set pgd at 0x310000, ptb at 0x311000
-    set_mapping((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
-
-    // Enable paging 
-    set_cr3(KERNEL_PGD);
-
-    // Initialisaion gdt
+    // Initialisaion of gdt
     gdt_reg_t gdtr;
     gdtr.limit = 0;
     gdtr.desc = gdt;
     set_gdtr(gdtr);
-    init_seg_desc(0,0,0,0); //1er segment null Index0
-    init_seg_desc(0xfffff,0,SEG_DESC_CODE_XR,0); //Segment code Ring 0 Index1
-    init_seg_desc(0xfffff,0,SEG_DESC_DATA_RW,0); //Segment data Ring 0 Index2
-    init_seg_desc(0xfffff,0,SEG_DESC_CODE_XR,3); //Segment Code Ring 3 Index3
-    init_seg_desc(0xfffff,0,SEG_DESC_DATA_RW,3); //Segment data Ring 3 index4
+    init_seg_desc(0,0,0,0, 0);
+    init_seg_desc(0xfffff,0,SEG_DESC_CODE_XR,0, 1); 
+    init_seg_desc(0xfffff,0,SEG_DESC_DATA_RW,0, 2);  
+    init_seg_desc(0xfffff,0,SEG_DESC_CODE_XR,3, 3);  
+    init_seg_desc(0xfffff,0,SEG_DESC_DATA_RW,3, 4); 
+
+    // Record TSS in the gdt 
+    init_seg_desc(0xfffff,0,SEG_DESC_SYS_TSS_AVL_32,3, 4);
 	
-    // Initialisation registres in gdt
+    // Initialisation of registres in gdt
     set_cs(gdt_krn_seg_sel(RING0_CODE));
     set_ss(gdt_krn_seg_sel(RING0_DATA));
     set_ds(gdt_krn_seg_sel(RING0_DATA));
     set_es(gdt_krn_seg_sel(RING0_DATA));
     set_fs(gdt_krn_seg_sel(RING0_DATA));
     set_gs(gdt_krn_seg_sel(RING0_DATA));
+
+    // Activation of pagination for kenerl
+    set_mapping((pde32_t *)KERNEL_PGD, (pte32_t *)KERNEL_PTB, PG_KRN | PG_RW);
+    // Enable paging 
+    set_cr3(KERNEL_PGD);
 }
 
-//--- Define tasks ---//
-/* This function allows to create one task with pgd/ptb, kernel stack and add the task to the shared memory. */
+/*
+** Define tasks
+** This function allows to create one task with pgd/ptb, kernel stack and add the task to the shared memory.
+*/
 void set_task(uint32_t user_task){
+    // Create and record the task
+    tasks[number_tasks] = user_task;
+    number_tasks++;
 
     // Set the kernel stack
     uint32_t *user_kernel_esp = (uint32_t *)(user_task + USER_KERNEL_STACK_START_OFFSET);
@@ -129,90 +149,70 @@ void set_task(uint32_t user_task){
     *(user_kernel_esp - 5) = user_task;                           // EIP
 
     print_stack_tasks(user_kernel_esp, number_tasks);
-
-    // Create the shared memory
-    //pte32_t *ptb_shared = (pte32_t *)(user_task + USER_PTB_OFFSET + 2 * 4096);
-    //pg_set_entry(&pgd_task[2], PG_USR | PG_RW, page_nr(ptb_shared)); // pgd[0] = ptb1, pgd[1] = ptb2, pgd[2] = ptb_shared
-    //pg_set_entry(&ptb_shared[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY)); // Pointe vers une même adresse
     
-    tasks[number_tasks] = user_task;
-    number_tasks++;
-
-    // Create pgd/ptb
+    // Set pagination for the task
     pde32_t *pgd_task = (pde32_t *)(user_task + USER_PGD_OFFSET);
     pte32_t *ptb_task = (pte32_t *)(user_task + USER_PTB_OFFSET);
     set_mapping(pgd_task, ptb_task, PG_USR | PG_RW);
+
+    // Create the shared memory
+    pte32_t *ptb_shared = (pte32_t *)(user_task + USER_PTB_OFFSET + 2 * 4096);
+    pg_set_entry(&pgd_task[2], PG_USR | PG_RW, page_nr(ptb_shared)); // pgd[0] = ptb1, pgd[1] = ptb2, pgd[2] = ptb_shared
+    pg_set_entry(&ptb_shared[0], PG_USR | PG_RW, page_nr(SHARED_MEMORY)); // Pointe vers une même adresse
 }
 
-//--- Kernel interruptions ---//
-/* This function allows to change task (task1->task2 and reverse). */
-void handler_scheduler(){
-    debug("Counteur Interruption (32) !\n");
-    asm volatile("int $0x80;\n");
-    /* They are no task 
-    if (number_tasks <= 0)
-        return;
+/*
+** Kernel interruptions
+** This function allows to save contexte.
+*/
+void scheduler(){
+    debug("Record contexte.\n");
+    asm("handler_scheduler:\n");
+    // Record contexte of the task 
+    asm("pusha\n");
+    // Code of interruption
+    asm("call change_task\n");
+    // Restor register
+    asm("popa\n");
+    // Return traiter l’interruption 3/ Restaurer les registres (popa), 4/ Retourner là où on était (iret)
+    //asm("iret\n");
+    debug("Repeat..\n");
+}
+/*
+** This function allows to change task (task1->task2 and reverse).
+*/
+void change_task(){
+    debug("Change task.\n");
+    
+    // For task 1, increment counter
+    debug("Task 1:\n    Increment the counter in the shared memory.\n    To do ...\n");
 
-    // It is the first time
-    if (current_task == -1){
-        current_task = 0;
-        ///set_cr3(tasks[current_task_pid].PGD);
-    }
-
-    // Change task
-    else{
-        // Code to trint the counteur with kernel syscall
-        debug("Change task");
-        uint32_t task = tasks[current_task];
-        current_task = (current_task + 1) % number_tasks;
-        uint32_t user_kernel_esp = task + USER_KERNEL_STACK_START_OFFSET;
-        // Record the context
-        tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
-        tss.s0.esp = user_kernel_esp;
-        //Change context
-
-         Changer de contexte
-        //set_cr3(task + USER_PGD_OFFSET);
-        int32_t esp = user_kernel_esp - (4 * 13); // 13 entries were pushed to the stack
-        asm volatile(
-        "mov %0, %%eax\n"
-        :
-        : "r"(esp));
-    }*/
+    // For task 2, Print counter with syscall
+    asm volatile("int $0x80;\n");  
+}
+/*
+** This function allows to print the task 2 with a syscall.
+*/
+void syscall(){
+    debug("Syscall interruption (80): \n    Print the value of the counter in the sharred memory.\n    To do...\n");
 }
 
-/* This function allows to print the task2 with a syscall. */
-void handle_kernel_print(){
-    // Code to trint the counteur with kernel syscall
-    debug("Syscall interruption (80) !\n");
-    //asm volatile("int $0x32;\n");
-}
-
-//--- Start tasks ---//
-/* This function allows to create idtr and register the thow handlers below. */
+/*
+** This function allows to create idtr and register the thow handlers below.
+** Then we strat the interruption at the index 32.
+*/
 void start_tasks(){
-    // Set registers in user land
-    /*
-    set_ds(gdt_usr_seg_sel(RING3_DATA));
-    set_es(gdt_usr_seg_sel(RING3_DATA));
-    set_fs(gdt_usr_seg_sel(RING3_DATA));
-    set_gs(gdt_usr_seg_sel(RING3_DATA));
-    set_tr(gdt_krn_seg_sel(TSS));*/
-
-    tss.s0.ss = gdt_krn_seg_sel(RING0_DATA);
-    tss.s0.esp = get_esp();
-	
     // Define idt
     idt_reg_t idtr;
     get_idtr(idtr);
     int_desc_t *idt = idtr.desc; //tableau comportant au maximum 256 descripteurs de 8 octets chacun, soit un descripteur par interruption. 
 
-    // Record handler for counter and schedule in idt.
-    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE), (offset_t)handler_scheduler);
+    // Record handler for scheduler in idt.
+    int_desc(&idt[32], gdt_krn_seg_sel(RING0_CODE), (offset_t)scheduler);
     idt[32].dpl = SEG_SEL_USR;
 
-    // Record handler for syscall and print in idt.
-    int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE), (offset_t)handle_kernel_print);
+    // Record handler for syscall in idt.
+    int_desc(&idt[0x80], gdt_krn_seg_sel(RING0_CODE), (offset_t)syscall);
     idt[0x80].dpl = SEG_SEL_USR; 
 
     // Start
@@ -226,6 +226,7 @@ void tp(){
     // Set up kernel: init gdt, tss, register and pagination
     set_kernel();
     set_cr0(get_cr0() | CR0_PG | CR0_PE);
+
     // Set up 2 tasks: init pagination, kernel stack and shared memory
     set_task((uint32_t)increment_counter);
     set_task((uint32_t)print_counter);
@@ -233,7 +234,7 @@ void tp(){
     // Start task: init idt and records handlers
     start_tasks();    
     
-    debug("|------------     Fin     -----------|\n");
+    debug("\n|------------     Fin     -----------|\n");
 
     while(1);
 }
