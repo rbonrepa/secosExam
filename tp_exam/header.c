@@ -4,6 +4,7 @@
 #include <segmem.h>
 #include <pagemem.h>
 #include <intr.h>
+#include <types.h>
 #include <cr.h>
 
 #define GDT_SIZE 6 
@@ -16,7 +17,7 @@
 
 //--- Kernel addresses ---//
 #define KERNEL_PGD 0x200000
-#define KERNEL_PTB 0x210000
+#define KERNEL_PTB KERNEL_PGD + 0x1000
 
 //--- User physical addresses ---//
 #define SHARED_MEMORY 0x800000 
